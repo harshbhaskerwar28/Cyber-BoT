@@ -13,16 +13,13 @@ from langchain.schema import AIMessage, HumanMessage, SystemMessage
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema.output_parser import StrOutputParser
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from dotenv import load_dotenv
 import time
 import json
 
 load_dotenv()
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY environment variable is not set")
 
 @dataclass
 class ProcessedDocument:
@@ -40,43 +37,86 @@ class AgentResponse:
     agent_name: str
     content: str
     confidence: float
-    #metadata: Dict = None
+    metadata: Dict = None
     processing_time: float = 0.0
 
 class DocumentProcessor:
-    """Enhanced document processor with deployment-specific FAISS handling"""
-    def __init__(self, index_path: str = "deployment/faiss_index"):
-        super().__init__()
-        self.index_path = index_path
+    """Enhanced document processing with better error handling"""
+    def __init__(self):
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
+        self.processed_documents: List[ProcessedDocument] = []
+        self._initialize_embeddings()
         self.vector_store = None
-        self.index_metadata = {}
-        self._ensure_deployment_directory()
 
-    def _ensure_deployment_directory(self):
-        """Ensure the deployment directory exists"""
-        os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
+    def _initialize_embeddings(self):
+        try:
+            self.embeddings = GoogleGenerativeAIEmbeddings(
+                model="models/embedding-001",
+                google_api_key=os.getenv("GOOGLE_API_KEY")
+            )
+        except Exception as e:
+            st.error(f"Failed to initialize embeddings: {str(e)}")
+            raise
 
-    def _save_index_metadata(self):
-        """Save metadata about the index"""
-        metadata_path = f"{self.index_path}_metadata.pkl"
-        metadata = {
-            'last_updated': datetime.now().isoformat(),
-            'total_vectors': self.vector_store.index.ntotal if self.vector_store else 0,
-            'dimension': self.vector_store.index.d if self.vector_store else 0
-        }
-        
-        with open(metadata_path, 'wb') as f:
-            pickle.dump(metadata, f)
+    async def process_file(self, file, progress_callback) -> ProcessedDocument:
+        try:
+            progress_callback(0.2, f"Processing {file.name}")
+            
+            if file.type == "application/pdf":
+                content = await self.process_pdf(file)
+                doc_type = "PDF"
+            elif file.type.startswith("image/"):
+                content = await self.process_image(file)
+                doc_type = "Image"
+            else:
+                raise ValueError(f"Unsupported file type: {file.type}")
 
-    def _load_index_metadata(self) -> Dict:
-        """Load index metadata"""
-        metadata_path = f"{self.index_path}_metadata.pkl"
-        if os.path.exists(metadata_path):
-            with open(metadata_path, 'rb') as f:
-                return pickle.load(f)
-        return {}
+            progress_callback(0.4, "Analyzing security content")
+            chunks = self.text_splitter.split_text(content)
+            
+            progress_callback(0.6, "Generating security summary")
+            summary = await self._generate_summary(content[:1000])
+            
+            return ProcessedDocument(
+                filename=file.name,
+                content=content,
+                chunks=chunks,
+                total_chars=len(content),
+                doc_type=doc_type,
+                summary=summary
+            )
+        except Exception as e:
+            st.error(f"Error processing {file.name}: {str(e)}")
+            return None
 
-    async def update_vector_store(self, documents: List[ProcessedDocument], progress_callback) -> bool:
+    async def process_pdf(self, pdf_file) -> str:
+        text = ""
+        try:
+            pdf_reader = PdfReader(pdf_file)
+            for page_num, page in enumerate(pdf_reader.pages):
+                extracted_text = page.extract_text()
+                if extracted_text:
+                    text += f"Page {page_num + 1}:\n{extracted_text}\n\n"
+            return text.strip()
+        except Exception as e:
+            raise Exception(f"PDF processing error: {str(e)}")
+
+    async def process_image(self, image_file) -> str:
+        try:
+            image = Image.open(image_file)
+            text = pytesseract.image_to_string(image)
+            return text.strip()
+        except Exception as e:
+            raise Exception(f"Image processing error: {str(e)}")
+
+    async def _generate_summary(self, text: str) -> str:
+        return f"{text[:200]}..."
+
+    async def update_vector_store(self, documents: List[ProcessedDocument], progress_callback):
         try:
             all_chunks = []
             metadata_list = []
@@ -90,116 +130,27 @@ class DocumentProcessor:
                     metadata_list.append({
                         "source": doc.filename,
                         "chunk_index": chunk_idx,
-                        "doc_type": doc.doc_type,
-                        "timestamp": datetime.now().isoformat()
+                        "doc_type": doc.doc_type
                     })
 
             if all_chunks:
-                progress_callback(0.8, "Creating deployment index")
+                progress_callback(0.8, "Creating security knowledge base")
+                self.vector_store = FAISS.from_texts(
+                    all_chunks,
+                    self.embeddings,
+                    metadatas=metadata_list
+                )
                 
-                # Get embeddings for all chunks
-                embeddings = await self._get_embeddings_batch(all_chunks)
+                progress_callback(0.9, "Finalizing security database")
+                self.vector_store.save_local("faiss_index")
                 
-                # Initialize FAISS index
-                dimension = len(embeddings[0])
-                index = faiss.IndexFlatL2(dimension)
-                
-                # Add vectors to the index
-                index.add(np.array(embeddings))
-                
-                # Save the index
-                faiss.write_index(index, f"{self.index_path}.faiss")
-                
-                # Save metadata separately
-                with open(f"{self.index_path}_meta.pkl", 'wb') as f:
-                    pickle.dump({
-                        'metadata': metadata_list,
-                        'chunks': all_chunks
-                    }, f)
-                
-                # Update the vector store
-                self.vector_store = self._load_vector_store()
-                
-                progress_callback(1.0, "Deployment index ready")
                 return True
                 
         except Exception as e:
-            st.error(f"Deployment index update error: {str(e)}")
+            st.error(f"Vector store update error: {str(e)}")
             return False
 
-    async def _get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """Get embeddings for a batch of texts"""
-        try:
-            embeddings = []
-            batch_size = 10  # Adjust based on your needs
-            
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
-                batch_embeddings = await asyncio.gather(*[
-                    self.embeddings.aembed_query(text) for text in batch
-                ])
-                embeddings.extend(batch_embeddings)
-            
-            return embeddings
-        except Exception as e:
-            raise Exception(f"Error generating embeddings: {str(e)}")
-
-    def _load_vector_store(self) -> Optional[FAISS]:
-        """Load the vector store from saved index"""
-        try:
-            if os.path.exists(f"{self.index_path}.faiss"):
-                # Load the FAISS index
-                index = faiss.read_index(f"{self.index_path}.faiss")
-                
-                # Load metadata and chunks
-                with open(f"{self.index_path}_meta.pkl", 'rb') as f:
-                    data = pickle.load(f)
-                
-                # Create new FAISS vector store
-                vector_store = FAISS(
-                    self.embeddings.embed_query,
-                    index,
-                    data['chunks'],
-                    data['metadata']
-                )
-                
-                return vector_store
-            return None
-        except Exception as e:
-            st.error(f"Error loading vector store: {str(e)}")
-            return None
-
-    async def similarity_search(self, query: str, k: int = 3) -> List[Dict]:
-        """Perform similarity search with error handling"""
-        try:
-            if not self.vector_store:
-                self.vector_store = self._load_vector_store()
-                if not self.vector_store:
-                    raise Exception("No vector store available")
-            
-            # Get query embedding
-            query_embedding = await self.embeddings.aembed_query(query)
-            
-            # Perform search
-            D, I = self.vector_store.index.search(
-                np.array([query_embedding]), k
-            )
-            
-            results = []
-            for i, idx in enumerate(I[0]):
-                if idx < len(self.vector_store.docstore._dict):
-                    doc = self.vector_store.docstore._dict[idx]
-                    results.append({
-                        'content': doc.page_content,
-                        'metadata': doc.metadata,
-                        'score': float(D[0][i])
-                    })
-            
-            return results
-            
-        except Exception as e:
-            st.error(f"Search error: {str(e)}")
-            return []
+# Replace the existing AgentStatus class with this implementation:
 
 class AgentStatus:
     """Enhanced agent status management with sidebar display"""
@@ -414,9 +365,12 @@ Ensure regulatory alignment."""
 
     async def get_relevant_context(self, query: str) -> str:
         try:
-            results = await self.doc_processor.similarity_search(query, k=3)
-            if results:
-                return "\n\n".join(result['content'] for result in results)
+            if self.doc_processor.vector_store:
+                docs = self.doc_processor.vector_store.similarity_search(
+                    query,
+                    k=3
+                )
+                return "\n\n".join(doc.page_content for doc in docs)
         except Exception as e:
             st.error(f"Error retrieving context: {str(e)}")
         return ""
