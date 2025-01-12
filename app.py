@@ -21,7 +21,6 @@ import json
 
 load_dotenv()
 
-langchain.llm_cache = InMemoryCache()
 
 @dataclass
 class ProcessedDocument:
