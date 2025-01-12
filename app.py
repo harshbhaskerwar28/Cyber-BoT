@@ -40,7 +40,7 @@ class AgentResponse:
     agent_name: str
     content: str
     confidence: float
-    metadata: Dict = None
+    #metadata: Dict = None
     processing_time: float = 0.0
 
 class DocumentProcessor:
