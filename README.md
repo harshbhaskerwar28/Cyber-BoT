@@ -62,6 +62,7 @@ streamlit run app.py
 ```mermaid
 graph TD
     A[User Input] --> B[Document Processor]
+    A[User Input] --> D[Multi-Agent System]
     B --> C[FAISS Vector Store]
     C --> D[Multi-Agent System]
     D --> E[Threat Hunter]
