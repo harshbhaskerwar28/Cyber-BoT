@@ -43,7 +43,7 @@ class AgentResponse:
     metadata: Dict = None
     processing_time: float = 0.0
 
-class DeploymentDocumentProcessor(DocumentProcessor):
+class DocumentProcessor:
     """Enhanced document processor with deployment-specific FAISS handling"""
     def __init__(self, index_path: str = "deployment/faiss_index"):
         super().__init__()
