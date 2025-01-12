@@ -52,19 +52,15 @@ class DocumentProcessor:
         self.vector_store = None
 
     @st.cache_resource
-    def _initialize_embeddings(self):
+    def _initialize_embeddings(_self):  # Changed 'self' to '_self' to fix caching error
         try:
-            self.embeddings = GoogleGenerativeAIEmbeddings(
+            return GoogleGenerativeAIEmbeddings(
                 model="models/embedding-001",
                 google_api_key=os.getenv("GOOGLE_API_KEY")
             )
         except Exception as e:
             st.error(f"Failed to initialize embeddings: {str(e)}")
             raise
-
-    @st.cache_data
-    def _cache_chunks(self, content):
-        return self.text_splitter.split_text(content)
 
     async def update_vector_store(self, documents: List[ProcessedDocument], progress_callback):
         try:
@@ -87,22 +83,56 @@ class DocumentProcessor:
                 progress_callback(0.8, "Creating vector store")
                 self.vector_store = FAISS.from_texts(
                     all_chunks,
-                    self.embeddings,
+                    self.embeddings,  # Now using cached embeddings
                     metadatas=metadata_list
                 )
                 
-                # Save with error handling
                 try:
                     progress_callback(0.9, "Saving vector store")
                     self.vector_store.save_local("faiss_index")
                 except Exception as save_error:
-                    st.warning("Could not save vector store locally")
-                    
+                    st.warning(f"Could not save vector store locally: {str(save_error)}")
+                
                 return True
                 
         except Exception as e:
             st.error(f"Vector store update error: {str(e)}")
             return False
+
+    @st.cache_data
+    def _process_text_chunks(_self, content):  # Added caching for text splitting
+        return _self.text_splitter.split_text(content)
+
+    async def process_file(self, file, progress_callback) -> ProcessedDocument:
+        try:
+            progress_callback(0.2, f"Processing {file.name}")
+            
+            if file.type == "application/pdf":
+                content = await self.process_pdf(file)
+                doc_type = "PDF"
+            elif file.type.startswith("image/"):
+                content = await self.process_image(file)
+                doc_type = "Image"
+            else:
+                raise ValueError(f"Unsupported file type: {file.type}")
+
+            progress_callback(0.4, "Splitting content")
+            chunks = self._process_text_chunks(content)  # Using cached text splitting
+            
+            progress_callback(0.6, "Generating summary")
+            summary = await self._generate_summary(content[:1000])
+            
+            return ProcessedDocument(
+                filename=file.name,
+                content=content,
+                chunks=chunks,
+                total_chars=len(content),
+                doc_type=doc_type,
+                summary=summary
+            )
+        except Exception as e:
+            st.error(f"Error processing {file.name}: {str(e)}")
+            return None
 
 class AgentStatus:
     """Enhanced agent status management with sidebar display"""
