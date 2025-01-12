@@ -9,6 +9,7 @@ langchain-google-genai
 google-generativeai
 numpy
 aiohttp
+faiss
 asyncio
 typing-extensions
 dataclasses
