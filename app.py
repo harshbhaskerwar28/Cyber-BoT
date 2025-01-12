@@ -41,7 +41,6 @@ class AgentResponse:
     processing_time: float = 0.0
 
 class DocumentProcessor:
-    """Enhanced document processing with better error handling"""
     def __init__(self):
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
@@ -52,6 +51,7 @@ class DocumentProcessor:
         self._initialize_embeddings()
         self.vector_store = None
 
+    @st.cache_resource
     def _initialize_embeddings(self):
         try:
             self.embeddings = GoogleGenerativeAIEmbeddings(
@@ -62,59 +62,9 @@ class DocumentProcessor:
             st.error(f"Failed to initialize embeddings: {str(e)}")
             raise
 
-    async def process_file(self, file, progress_callback) -> ProcessedDocument:
-        try:
-            progress_callback(0.2, f"Processing {file.name}")
-            
-            if file.type == "application/pdf":
-                content = await self.process_pdf(file)
-                doc_type = "PDF"
-            elif file.type.startswith("image/"):
-                content = await self.process_image(file)
-                doc_type = "Image"
-            else:
-                raise ValueError(f"Unsupported file type: {file.type}")
-
-            progress_callback(0.4, "Analyzing security content")
-            chunks = self.text_splitter.split_text(content)
-            
-            progress_callback(0.6, "Generating security summary")
-            summary = await self._generate_summary(content[:1000])
-            
-            return ProcessedDocument(
-                filename=file.name,
-                content=content,
-                chunks=chunks,
-                total_chars=len(content),
-                doc_type=doc_type,
-                summary=summary
-            )
-        except Exception as e:
-            st.error(f"Error processing {file.name}: {str(e)}")
-            return None
-
-    async def process_pdf(self, pdf_file) -> str:
-        text = ""
-        try:
-            pdf_reader = PdfReader(pdf_file)
-            for page_num, page in enumerate(pdf_reader.pages):
-                extracted_text = page.extract_text()
-                if extracted_text:
-                    text += f"Page {page_num + 1}:\n{extracted_text}\n\n"
-            return text.strip()
-        except Exception as e:
-            raise Exception(f"PDF processing error: {str(e)}")
-
-    async def process_image(self, image_file) -> str:
-        try:
-            image = Image.open(image_file)
-            text = pytesseract.image_to_string(image)
-            return text.strip()
-        except Exception as e:
-            raise Exception(f"Image processing error: {str(e)}")
-
-    async def _generate_summary(self, text: str) -> str:
-        return f"{text[:200]}..."
+    @st.cache_data
+    def _cache_chunks(self, content):
+        return self.text_splitter.split_text(content)
 
     async def update_vector_store(self, documents: List[ProcessedDocument], progress_callback):
         try:
@@ -134,23 +84,25 @@ class DocumentProcessor:
                     })
 
             if all_chunks:
-                progress_callback(0.8, "Creating security knowledge base")
+                progress_callback(0.8, "Creating vector store")
                 self.vector_store = FAISS.from_texts(
                     all_chunks,
                     self.embeddings,
                     metadatas=metadata_list
                 )
                 
-                progress_callback(0.9, "Finalizing security database")
-                self.vector_store.save_local("faiss_index")
-                
+                # Save with error handling
+                try:
+                    progress_callback(0.9, "Saving vector store")
+                    self.vector_store.save_local("faiss_index")
+                except Exception as save_error:
+                    st.warning("Could not save vector store locally")
+                    
                 return True
                 
         except Exception as e:
             st.error(f"Vector store update error: {str(e)}")
             return False
-
-# Replace the existing AgentStatus class with this implementation:
 
 class AgentStatus:
     """Enhanced agent status management with sidebar display"""
