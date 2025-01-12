@@ -7,8 +7,6 @@ langchain
 langchain-groq
 langchain-google-genai
 google-generativeai
-faiss-cpu
-faiss
 numpy
 aiohttp
 asyncio
