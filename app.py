@@ -411,12 +411,9 @@ Ensure regulatory alignment."""
 
     async def get_relevant_context(self, query: str) -> str:
         try:
-            if self.doc_processor.vector_store:
-                docs = self.doc_processor.vector_store.similarity_search(
-                    query,
-                    k=3
-                )
-                return "\n\n".join(doc.page_content for doc in docs)
+            results = await self.doc_processor.similarity_search(query, k=3)
+            if results:
+                return "\n\n".join(result['content'] for result in results)
         except Exception as e:
             st.error(f"Error retrieving context: {str(e)}")
         return ""
