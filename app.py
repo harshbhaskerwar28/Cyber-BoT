@@ -220,7 +220,7 @@ class CyberSecurityAgent:
     def __init__(self):
         self.llm = ChatGroq(
             temperature=0.3,
-            model_name="llama-3.1-70b-versatile",
+            model_name="llama-3.1-8b-instant",
             groq_api_key=os.getenv("GROQ_API_KEY")
         )
         self.chat_history = []
